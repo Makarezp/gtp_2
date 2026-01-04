@@ -12,6 +12,18 @@ class GPTConfig:
     n_head: int = 6
     n_embd: int = 384
 
+class Block(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.mlp = MLP(config)
+
+    def forward(self, x: torch.Tensor):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
 
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -27,7 +39,3 @@ class GPT(nn.Module):
             )
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
-        
-
-
