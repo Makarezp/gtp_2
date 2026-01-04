@@ -74,6 +74,7 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
+
     def __init__(self, config: GPTConfig):
         super().__init__()
         self.config = config
@@ -88,6 +89,21 @@ class GPT(nn.Module):
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
+    def forwad(self, idx):
+        B,T = idx.size()
+        assert T <= self.confg.block_size
+
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
+        pos_emb = self.tranformer.wpe(pos)
+        tok_emb = self.transformer.wte(idx)
+        x = tok_emb + pos_emb
+
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+        return logits
+        
     @classmethod
     def from_pretrained(cls, model_type: str) -> "GPT":
         assert model_type in {'gpt2'}
