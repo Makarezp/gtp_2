@@ -89,7 +89,7 @@ class GPT(nn.Module):
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         B, T = idx.size()
         assert T <= self.config.block_size
 
@@ -102,7 +102,10 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type: str) -> "GPT":
@@ -163,11 +166,8 @@ elif device == "mps":
 
 
 num_return_sequences = 5
-max_length = 30
+max_length = 50
 
-model = GPT.from_pretrained("gpt2")
-model.eval()
-model.to(device)
 
 import tiktoken
 
@@ -180,6 +180,24 @@ B, T = 4, 32
 buf = torch.tensor(tokens[: B * T + 1])
 x = buf[:-1].view(B, T)
 y = buf[1:].view(B, T)
+
+model = GPT(GPTConfig())
+model.to(device)
+x, y = x.to(device), y.to(device)
+
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step {i}, loss: {loss.item()}")
+
+print(loss)
+import sys
+
+sys.exit(0)
 
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
