@@ -13,6 +13,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
 
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -74,7 +75,6 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-
     def __init__(self, config: GPTConfig):
         super().__init__()
         self.config = config
@@ -89,12 +89,12 @@ class GPT(nn.Module):
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forwad(self, idx):
-        B,T = idx.size()
-        assert T <= self.confg.block_size
+    def forward(self, idx):
+        B, T = idx.size()
+        assert T <= self.config.block_size
 
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
-        pos_emb = self.tranformer.wpe(pos)
+        pos_emb = self.transformer.wpe(pos)
         tok_emb = self.transformer.wte(idx)
         x = tok_emb + pos_emb
 
@@ -103,32 +103,36 @@ class GPT(nn.Module):
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
         return logits
-        
+
     @classmethod
     def from_pretrained(cls, model_type: str) -> "GPT":
-        assert model_type in {'gpt2'}
+        assert model_type in {"gpt2"}
         from transformers import GPT2LMHeadModel
+
         print("loading weights from pretrained gpt: %s" % model_type)
 
-        config_args = {
-            'gpt2': dict(n_layer=12, n_head=12, n_embd=768)
-        }[model_type]
-        config_args['vocab_size'] = 50257
-        config_args['block_size'] = 1024
+        config_args = {"gpt2": dict(n_layer=12, n_head=12, n_embd=768)}[model_type]
+        config_args["vocab_size"] = 50257
+        config_args["block_size"] = 1024
 
         config = GPTConfig(**config_args)
         model = GPT(config)
         sd = model.state_dict()
         sd_keys = sd.keys()
-        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')]
+        sd_keys = [k for k in sd_keys if not k.endswith(".attn.bias")]
 
         model_hf = GPT2LMHeadModel.from_pretrained(model_type)
         sd_hf = model_hf.state_dict()
 
         sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.asked_bias')]
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')]
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight']
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith(".attn.masked_bias")]
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith(".attn.bias")]
+        transposed = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
 
         assert len(sd_keys_hf) == len(sd_keys), "Mismatched keys"
 
@@ -137,10 +141,66 @@ class GPT(nn.Module):
                 assert sd_hf[k].shape[::-1] == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k].t())
-            else: 
+            else:
                 assert sd_hf[k].shape == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k])
         return model
 
-model = GPT.from_pretrained('gpt2')
+
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+print(f"using device: {device}")
+
+torch.manual_seed(42)
+if device == "cuda":
+    torch.cuda.manual_seed(42)
+elif device == "mps":
+    torch.mps.manual_seed(42)
+
+
+num_return_sequences = 5
+max_length = 30
+
+model = GPT.from_pretrained("gpt2")
+model.eval()
+model.to(device)
+
+import tiktoken
+
+enc = tiktoken.get_encoding("gpt2")
+with open("input.txt", "r") as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[: B * T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+tokens = torch.tensor(tokens, dtype=torch.long)
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+x = tokens.to(device)
+
+torch.manual_seed(42)
+if device == "cuda":
+    torch.cuda.manual_seed(42)
+elif device == "mps":
+    torch.mps.manual_seed(42)
+while x.size(1) < max_length:
+    with torch.no_grad():
+        logits = model(x)
+        logits = logits[:, -1, :]
+        probs = F.softmax(logits, dim=-1)
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+        ix = torch.multinomial(topk_probs, 1)
+        xcol = torch.gather(topk_indices, -1, ix)
+        x = torch.cat((x, xcol), dim=1)
+
+for i in range(num_return_sequences):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens)
+    print(">", decoded)
