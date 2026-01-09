@@ -22,7 +22,7 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
-        self.register_buffer(
+        self.register_buffer( 
             "bias",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
                 1, 1, config.block_size, config.block_size
@@ -30,7 +30,7 @@ class CausalSelfAttention(nn.Module):
         )
 
     def forward(self, x: torch.Tensor):
-        B, T, C = x.size()
+        B, T, C = x.size() 
         qkv = self.c_attn(x)
         q, k, v = qkv.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
