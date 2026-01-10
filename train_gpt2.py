@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from sympy import true
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -22,7 +23,7 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
-        self.register_buffer( 
+        self.register_buffer(
             "bias",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
                 1, 1, config.block_size, config.block_size
@@ -30,17 +31,14 @@ class CausalSelfAttention(nn.Module):
         )
 
     def forward(self, x: torch.Tensor):
-        B, T, C = x.size() 
+        B, T, C = x.size()
         qkv = self.c_attn(x)
         q, k, v = qkv.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        y = att @ v
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.c_proj(y)
         return y
@@ -188,7 +186,8 @@ max_length = 30
 
 import tiktoken
 
-class DataLoaderLite:  
+
+class DataLoaderLite:
     def __init__(self, B, T):
         self.B = B
         self.T = T
@@ -204,7 +203,7 @@ class DataLoaderLite:
 
     def next_batch(self):
         B, T = self.B, self.T
-        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+        buf = self.tokens[self.current_position : self.current_position + B * T + 1]
         x = (buf[:-1]).view(B, T)
         y = (buf[1:]).view(B, T)
 
@@ -214,7 +213,7 @@ class DataLoaderLite:
         return x, y
 
 
-train_loader = DataLoaderLite(4, 128)
+train_loader = DataLoaderLite(B=16, T=1024)
 
 model = GPT(GPTConfig())
 model.to(device)
@@ -222,6 +221,7 @@ model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
+    t9 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
