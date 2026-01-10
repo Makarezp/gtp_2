@@ -1,15 +1,14 @@
 from dataclasses import dataclass
-from sympy import true
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import math
+import time
 
 
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 50257
+    vocab_size: int = 50304
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -171,9 +170,13 @@ if torch.cuda.is_available():
     device = "cuda"
 elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
+
 print(f"using device: {device}")
 
 torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision("high")
+
 if device == "cuda":
     torch.cuda.manual_seed(42)
 elif device == "mps":
@@ -213,28 +216,44 @@ class DataLoaderLite:
         return x, y
 
 
-train_loader = DataLoaderLite(B=16, T=1024)
+train_loader = DataLoaderLite(B=4, T=1024)
+
 
 model = GPT(GPTConfig())
+model = torch.compile(model)
 model.to(device)
 
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
-    t9 = time.time()
+    if device == "mps":
+        torch.mps.synchronize()
+    elif device == "cuda":
+        torch.cuda.synchronize()
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        logits, loss = model(x, y)
     loss.backward()
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
-    print(f"step {i}, loss: {loss.item()}")
+    if device == "mps":
+        torch.mps.synchronize()
+    elif device == "cuda":
+        torch.cuda.synchronize()
+    t1 = time.time()
+    dt = (t1 - t0) * 1000  # milliseconds
+    tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
+    print(
+        f"step {i}, loss: {loss.item():.6f}, time: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}"
+    )
 
-print(loss)
-import sys
+import tiktoken
 
-sys.exit(0)
-
+enc = tiktoken.get_encoding("gpt2")
+tokens = train_loader.tokens[:50].tolist()
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
 x = tokens.to(device)
