@@ -184,7 +184,7 @@ elif device == "mps":
 
 
 num_return_sequences = 5
-max_length = 30
+max_length = 60
 
 
 import tiktoken
@@ -224,7 +224,7 @@ model = torch.compile(model)
 model.to(device)
 
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 for i in range(50):
     if device == "mps":
         torch.mps.synchronize()
@@ -265,7 +265,7 @@ elif device == "mps":
     torch.mps.manual_seed(42)
 while x.size(1) < max_length:
     with torch.no_grad():
-        logits = model(x)
+        logits, _ = model(x)
         logits = logits[:, -1, :]
         probs = F.softmax(logits, dim=-1)
         topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
